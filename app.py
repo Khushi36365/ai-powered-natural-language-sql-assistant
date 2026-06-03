@@ -4,7 +4,7 @@ from main import get_answer, generate_csv_from_answer
 import pandas as pd
 
 
-st.title("AI SQL Assistant")
+st.title("AI-Powered Natural Language SQL Assistant")
 
 # Initialize chat history
 if "messages" not in st.session_state:
