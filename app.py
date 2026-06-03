@@ -1,82 +1,79 @@
-import os
-from dotenv import load_dotenv
+import streamlit as st
+from main import get_answer, generate_csv_from_answer
 
-from langchain_community.utilities import SQLDatabase
-from langchain_community.agent_toolkits import SQLDatabaseToolkit
-from langchain_community.agent_toolkits.sql.base import create_sql_agent
+import pandas as pd
 
-from langchain_groq import ChatGroq
 
-import time
+st.title("AI SQL Assistant")
 
-# Load environment variables
-load_dotenv()
+# Initialize chat history
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-# 1️⃣ Connect LLM (Groq) — use stable model
-llm = ChatGroq(
-    groq_api_key=os.getenv("GROQ_API_KEY"),
-    model_name="llama-3.3-70b-versatile",   
-    temperature=0
-)
+# Display chat history
+for i, msg in enumerate(st.session_state.messages):
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
-# 2️⃣ Connect Database (limit tables for better accuracy)
-db = SQLDatabase.from_uri(
-    os.getenv("DATABASE_URL"),
-    include_tables=[
-        "users_table",
-        "campaigns",
-        "invoices",
-        "transactions"
-    ]
-)
+# Chat input (Enter to submit, Shift+Enter for newline)
+question = st.chat_input("Ask your question (use ; for multiple queries)")
 
-# 3️⃣ Create Toolkit
-toolkit = SQLDatabaseToolkit(db=db, llm=llm)
+# When user asks something
+if question:
+    queries = [q.strip() for q in question.split(";") if q.strip()]
 
-# 4️⃣ Add strong system instructions (VERY IMPORTANT)
-prefix = """
-You are a PostgreSQL expert.
+    for q in queries:
+        # show user message
+        st.session_state.messages.append({
+            "role": "user",
+            "content": q
+        })
 
-STRICT RULES:
-- ONLY use SELECT queries
-- NEVER modify database (no DELETE, DROP, UPDATE, INSERT)
-- ALWAYS execute query and return FINAL ANSWER (not SQL)
-- Do NOT use markdown
-- Do NOT loop
+        with st.chat_message("user"):
+            st.markdown(q)
 
-Tables:
-users_table(id, name, email)
-campaigns(id, user_id, name, budget)
-invoices(id, user_id, amount, status)
-transactions(id, user_id, amount, description, created_at)
-"""
+        # process each query separately
+        with st.chat_message("assistant"):
+            with st.spinner("⏳ Thinking..."):
+                answer = get_answer(q)
 
-# 5️⃣ Create Agent (fixed settings)
-agent = create_sql_agent(
-    llm=llm,
-    toolkit=toolkit,
-    verbose=False,
-    agent_type="zero-shot-react-description",
-    handle_parsing_errors=True,
-    max_iterations=5,        # ✅ prevents infinite loop
-    early_stopping_method="force",  # ✅ stops bad loops
-    prefix=prefix
-)
+                st.markdown(answer)
 
-# 6️⃣ Chat Loop
-print("AI SQL Assistant Ready! (type 'exit' to quit)")
+                df = generate_csv_from_answer(answer)
 
-while True:
-    question = input("\nAsk your question: ")
+        # store response
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": answer,
+        })
 
-    if question.lower() == "exit":
-        break
+# SIDEBAR FULL REPORT DOWNLOAD (NEW)
 
-    try:
-        response = agent.invoke({"input": question})
-        print("\nAnswer:", response["output"])
+with st.sidebar:
+    st.header("📊 Export")
 
-        time.sleep(2)
+    if "messages" in st.session_state and st.session_state.messages:
 
-    except Exception as e:
-        print("❌ Error:", e)
+        all_data = []
+
+        for msg in st.session_state.messages:
+            if msg["role"] == "assistant":
+                all_data.append({
+                    "response": msg["content"]
+                })
+
+        if all_data:
+            df = pd.DataFrame(all_data)
+            csv = df.to_csv(index=False).encode("utf-8")
+
+            st.download_button(
+                label="📥 Download Full Report",
+                data=csv,
+                file_name="full_report.csv",
+                mime="text/csv",
+                key="sidebar_download"
+            )
+        else:
+            st.info("No data yet.")
+    else:
+        st.info("Ask questions to generate report.")
